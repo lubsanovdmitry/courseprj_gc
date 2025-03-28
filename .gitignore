@@ -1,0 +1,6 @@
+build/
+CMakeUserLists.txt
+*.o
+compile_commands.json
+.vscode
+.cache
