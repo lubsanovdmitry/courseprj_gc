@@ -65,6 +65,15 @@ void memory_init(void* heap, uint32_t heap_size);
 void* memory_alloc(uint32_t size);
 
 /**
+ * @brief Rellocate memory in heap
+ *
+ * @param obj old object
+ * @param new_size new size
+ * @return void* new pointer
+ */
+void* memory_realloc(void* obj, uint32_t new_size);
+
+/**
  * @brief Free memory from heap
  *
  * @param ptr pointer to memory to free

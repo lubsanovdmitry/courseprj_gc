@@ -197,6 +197,21 @@ void memory_free(void* ptr) {
     }
 }
 
+void* memory_realloc(void* obj, uint32_t new_size) {
+    block_header_t* hdr = (block_header_t*)obj - 1;
+    if (hdr->size_class != 31 && SIZE_CLASSES[hdr->size_class] >= new_size) {
+        hdr->size = new_size;
+        return obj;
+    }
+    void* new = memory_alloc(new_size);
+    if (!new) {
+        return NULL;
+    }
+    memcpy(new, obj, hdr->size);
+    memory_free(obj);
+    return new;
+}
+
 uint32_t memory_get_allocd_sz() {
     return allocator.allocated;
 }
