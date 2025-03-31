@@ -3,12 +3,49 @@
 #include <assert.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 allocator_t allocator;
 
 static uint32_t align_sz(uint32_t size) {
     return (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+}
+
+bool is_valid_heap_addr(void* ptr) {
+    if (!ptr)
+        return true;
+    return (uintptr_t)ptr >= (uintptr_t)allocator.heap &&
+           (uintptr_t)ptr < allocator.end;
+}
+
+void validate_free_list() {
+    // block_header_t* cur = allocator.free;
+    // while (cur) {
+    //     if (!is_valid_heap_addr(cur)) {
+    //         printf("Invalid free list pointer: %p\n", cur);
+    //         abort();
+    //     }
+    //     if (cur->next && !is_valid_heap_addr(cur->next)) {
+    //         printf("Invalid next pointer: %p -> %p\n", cur, cur->next);
+    //         abort();
+    //     }
+    //     cur = cur->next;
+    // }
+    // cur = allocator.large;
+    // while (cur) {
+    //     if (!is_valid_heap_addr(cur)) {
+    //         printf("Invalid large list pointer: %p\n", cur);
+    //         abort();
+    //     }
+    //     if (cur->next && !is_valid_heap_addr(cur->next)) {
+    //         printf("Invalid large next pointer: %p -> %p\n", cur, cur->next);
+    //         abort();
+    //     }
+    //     cur = cur->next;
+    // }
 }
 
 void memory_init(void* heap, uint32_t heap_size) {
@@ -28,13 +65,14 @@ void memory_init(void* heap, uint32_t heap_size) {
         allocator.size_classes[i].free_list = NULL;
         cur += small_reg_sz;
     }
+    allocator.large = NULL;
     block_header_t* first = (block_header_t*)cur;
     first->size = ((uintptr_t)heap + heap_size) - cur - sizeof(*first);
     first->occ = 0;
-    first->large = 1;
     first->size_class = 31;
     first->next = NULL;
     allocator.free = first;
+    validate_free_list();
 }
 
 static int get_size_class(uint16_t size) {
@@ -46,6 +84,13 @@ static int get_size_class(uint16_t size) {
     return -1;
 }
 
+uint32_t memory_get_sz(void* ptr) {
+    if (!ptr) {
+        return 0;
+    }
+    return (((block_header_t*)ptr) - 1)->size;
+}
+
 static void* reg_alloc(int size_class, uint32_t size) {
     region_t* reg = &allocator.size_classes[size_class];
     if (reg->remaining < reg->block_size) {
@@ -53,7 +98,7 @@ static void* reg_alloc(int size_class, uint32_t size) {
             block_header_t* blk = reg->free_list;
             reg->free_list = blk->next;
             blk->color = CGRAY;
-            blk->occ = 1;
+            blk->occ = 0xEA;
             allocator.allocated += SIZE_CLASSES[size_class];
             return (void*)(blk + 1);
         } else {
@@ -63,7 +108,6 @@ static void* reg_alloc(int size_class, uint32_t size) {
     block_header_t* blk = reg->bump;
     blk->size = SIZE_CLASSES[size_class];
     blk->color = CGRAY;
-    blk->large = 0;
     blk->size_class = size_class;
     blk->occ = 1;
     reg->bump = (block_header_t*)((uintptr_t)reg->bump + reg->block_size);
@@ -97,13 +141,12 @@ static void* mem_alloc_free_list(uint32_t size) {
     if (!best) {
         return NULL;
     }
-
+    validate_free_list();
     if (best_fit_prev) {
         best_fit_prev->next = best->next;
     } else {
         allocator.free = best->next;
     }
-
     uint32_t rem = best->size - size;
     if (rem >= sizeof(block_header_t) + 16 * ALIGNMENT) {
         block_header_t* new =
@@ -111,14 +154,25 @@ static void* mem_alloc_free_list(uint32_t size) {
         new->size = rem - sizeof(block_header_t);
         new->occ = 0;
         new->size_class = 31;
-        new->large = 1;
-        new->next = allocator.free;
-        allocator.free = new;
-
+        new->next = NULL;
         best->size = size;
-    }
+        if (allocator.free) {
+            block_header_t** prev = &allocator.free;
+            block_header_t* current = allocator.free;
 
-    best->occ = 1;
+            while (current && (uintptr_t)current < (uintptr_t) new) {
+                prev = &current->next;
+                current = current->next;
+            }
+
+            new->next = current;
+            *prev = new;
+        } else {
+            allocator.free = new;
+        }
+    }
+    validate_free_list();
+    best->occ = 0xDE;
     allocator.allocated += best->size;
     return (void*)(best + 1);
 }
@@ -130,9 +184,11 @@ static void* mem_alloc_med(uint32_t size) {
         hdr->size = size;
         hdr->size_class = 31;
         hdr->occ = 1;
+        validate_free_list();
         hdr->next = allocator.large;
         hdr->color = CGRAY;
         allocator.large = hdr;
+        validate_free_list();
     }
     return new;
 }
@@ -153,19 +209,19 @@ void* memory_alloc(uint32_t size) {
         new = mem_alloc_med(size);
     }
 
-    if (!new) {
-        // assert(0);
-    }
-
     return new;
 }
 
 void memory_free(void* ptr) {
+    // validate_free_list();
     if (!ptr) {
         return;
     }
 
     block_header_t* hdr = ((block_header_t*)ptr) - 1;
+    if (hdr->occ == 0) {
+        return;
+    }
     allocator.allocated -= hdr->size;
 
     if (hdr->size_class < NUM_CLASSES) {
@@ -173,27 +229,34 @@ void memory_free(void* ptr) {
         hdr->next = allocator.size_classes[hdr->size_class].free_list;
         allocator.size_classes[hdr->size_class].free_list = hdr;
     } else {
+        validate_free_list();
         block_header_t** pp = &allocator.large;
-        while (*pp && *pp != hdr) {
+        while (pp && *pp && *pp != hdr) {
             pp = &(*pp)->next;
         }
         if (*pp) {
             *pp = hdr->next;
         }
-
+        validate_free_list();
         hdr->occ = 0;
-
         hdr->next = NULL;
-        block_header_t** cur = &allocator.free;
-        while (*cur && *cur < hdr) {
-            if (*cur == (*cur)->next) {
-                (*cur)->next = NULL;
-                break;
+        block_header_t* cur = allocator.free;
+
+        if (allocator.free) {
+            block_header_t** prev = &allocator.free;
+            block_header_t* current = allocator.free;
+
+            while (current && (uintptr_t)current < (uintptr_t)hdr) {
+                prev = &current->next;
+                current = current->next;
             }
-            cur = &(*cur)->next;
+
+            hdr->next = current;
+            *prev = hdr;
+        } else {
+            allocator.free = hdr;
         }
-        hdr->next = *cur;
-        *cur = hdr;
+        validate_free_list();
     }
 }
 
@@ -234,42 +297,30 @@ void memory_set_color(void* ptr, color_t color) {
     (((block_header_t*)ptr) - 1)->color = color;
 }
 
-uint32_t memory_get_sz(void* ptr) {
-    return (((block_header_t*)ptr) - 1)->size;
-}
-
 void memory_coalesce_blks() {
+    // block_header_t* cur = allocator.free;
+    // while (cur && cur->next) {
+    //     if ((uintptr_t)cur >= (uintptr_t)cur->next) {
+    //         abort();
+    //     }
+    //     cur = cur->next;
+    // }
+
     block_header_t* cur = allocator.free;
 
-    while (cur) {
-        if (cur == cur->next) {
-            cur->next = NULL;
-            break;
-        }
-        cur = cur->next;
-    }
-    cur = allocator.free;
-
     while (cur && cur->next) {
-        if (cur == cur->next) {
-            cur->next = NULL;
-            break;
-        }
+        uintptr_t end_addr =
+            (uintptr_t)cur + sizeof(block_header_t) + cur->size;
+        if (end_addr == (uintptr_t)cur->next && !cur->occ && !cur->next->occ) {
+            block_header_t* old = cur->next;
+            cur->next = old->next;
+            cur->size += old->size + sizeof(block_header_t);
 
-        block_header_t* next_block = cur->next;
-        uintptr_t cur_end = (uintptr_t)(cur + 1) + cur->size;
-
-        if (cur_end == (uintptr_t)next_block) {
-            cur->size += sizeof(block_header_t) + next_block->size;
-
-            if (next_block->next == cur || next_block->next == next_block) {
-                cur->next = NULL;
-            } else {
-                cur->next = next_block->next;
-            }
-
+            memset(old, 0xEA, sizeof(block_header_t));
         } else {
             cur = cur->next;
         }
     }
+
+    validate_free_list();
 }

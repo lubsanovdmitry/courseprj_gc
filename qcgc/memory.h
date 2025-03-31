@@ -4,10 +4,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define HEAP_SIZE (1024 * 1024 * 1024)
-#define LARGE_OBJECT 512
+#define KBYTE 1024
+#define MBYTE (1024 * KBYTE)
+
+#define HEAP_SIZE (512 * MBYTE)
 #define ALIGNMENT __alignof(void*)
-#define SEARCH_LIM 32
+#define SEARCH_LIM 1024
 
 static const uint32_t SIZE_CLASSES[] = {16, 32, 64, 128, 256, 512};
 
@@ -21,9 +23,8 @@ typedef enum {
 } color_t;
 
 typedef struct blockheader_s {
-    uint8_t color : 2;
-    uint8_t large : 1;
-    uint8_t size_class : 5;
+    uint8_t color;
+    uint8_t size_class;
     uint8_t occ;
     uint32_t size;
     struct blockheader_s* next;
