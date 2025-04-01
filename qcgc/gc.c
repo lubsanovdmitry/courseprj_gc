@@ -116,24 +116,7 @@ static void gc_sweep(bool is_minor) {
 
         if ((cur->color == CWHITE || cur->color == CGRAY)) {
             block_header_t* next = cur->next;
-            // *pp = next;
-            // cur->next = NULL;
-            // cur->occ = 0;
-            // cur->color = CWHITE;
-            // if (allocator.free) {
-            //     block_header_t** prev = &allocator.free;
-            //     block_header_t* current = allocator.free;
 
-            //     while (current && (uintptr_t)current < (uintptr_t)cur) {
-            //         prev = &current->next;
-            //         current = current->next;
-            //     }
-
-            //     cur->next = current;
-            //     *prev = cur;
-            // } else {
-            //     allocator.free = cur;
-            // }
             if (cur->color == CWHITE || cur->color == CGRAY) {
                 *pp = cur->next;
                 void* ptr = (void*)(cur + 1);
@@ -192,6 +175,11 @@ void gc_push_root(void* root) {
 }
 
 void gc_pop_roots(size_t count) {
+    // if (gc.prev_root_size >= count) {
+    //     gc.prev_root_size -= count;
+    // } else if (gc.prev_root_size < count) {
+    //     gc.prev_root_size = 0;
+    // }
     v_mass_pop(&gc.roots, count);
 }
 
@@ -216,19 +204,19 @@ static void gc_incremental_mark_step() {
 #endif
     bool is_minor = gc.collection_counter % GC_MINOR_COLLECTION_INTERVAL != 0;
     gc.is_minor_collection = is_minor;
-    gc_start_mark_phase(false);
+    gc_start_mark_phase(is_minor);
     size_t lim = gc.gray_stack.size / 2;
     if (lim < 128) {
         lim = 128;
     }
     gc_process_gray_stack(lim);
 
-    if (gc.gray_stack.size == 0) {
-        gc_sweep(gc.is_minor_collection);
-        gc.collection_in_progress = false;
-        gc.bytes_allocated_since_collection = 0;
-        gc.collection_counter++;
-    }
+    // if (gc.gray_stack.size == 0) {
+    //     gc_sweep(gc.is_minor_collection);
+    //     gc.collection_in_progress = false;
+    //     gc.bytes_allocated_since_collection = 0;
+    //     gc.collection_counter++;
+    // }
 
 #ifdef TIME
     gc_meta.inc_calls++;
@@ -244,23 +232,21 @@ static void gc_incremental_mark_step() {
 }
 
 void* gc_allocate(uint32_t size) {
-    if (1) {
-        gc.bytes_allocated_since_collection += size;
-
-        if (gc.bytes_allocated_since_collection >= GC_INCREMENTAL_MARK_BYTES) {
+    if (gc.bytes_allocated_since_collection >= GC_INCREMENTAL_MARK_BYTES) {
+        gc_incremental_mark_step();
+        if (gc_meta.tot_allocs % 1000 == 0) {
             if (gc.collection_counter % GC_FULL_COLLECTION_INTERVAL == 0) {
                 gc_collect(true);
             } else {
-                gc_incremental_mark_step();
+                gc_collect(false);
             }
         }
-    } else {
-        gc_incremental_mark_step();
     }
 
     void* ptr = memory_alloc(size);
 
     if (ptr) {
+        gc.bytes_allocated_since_collection += size;
         ++gc_meta.tot_allocs;
     }
     validate_free_list();
@@ -305,7 +291,7 @@ void gc_collect(bool force_major) {
     gc.collection_in_progress = false;
     gc.bytes_allocated_since_collection = 0;
     gc.collection_counter++;
-    if (!is_minor) {
+    if (1) {
         memory_coalesce_blks();
     }
 

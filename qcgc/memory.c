@@ -298,14 +298,6 @@ void memory_set_color(void* ptr, color_t color) {
 }
 
 void memory_coalesce_blks() {
-    // block_header_t* cur = allocator.free;
-    // while (cur && cur->next) {
-    //     if ((uintptr_t)cur >= (uintptr_t)cur->next) {
-    //         abort();
-    //     }
-    //     cur = cur->next;
-    // }
-
     block_header_t* cur = allocator.free;
 
     while (cur && cur->next) {
